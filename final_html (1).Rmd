@@ -1,0 +1,454 @@
+---
+title: "Exploratory Data Analysis Of User Reviews In The Yelp Dataset"
+author: "Taha Hasan, Huzaifa Ali, Austin Bulman, Leila K, Can Erdogan"
+output:
+  ioslides_presentation: default
+  slidy_presentation: default
+---
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RSQLite)
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(grid)
+library(gridBase)
+library(stringr)
+library(tidyr)
+library(ggwordcloud)
+library(viridis)
+```
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+
+db_path <- "C:\\Users\\Taha Hasan\\Desktop\\fall21\\stat405\\project\\yelp.db"
+dcon <- dbConnect(SQLite(), dbname = db_path)
+
+query <- "SELECT business_id, user_id, stars, text, date
+          FROM yelp_review"
+res <- dbSendQuery(dcon, query)
+yelp_review <- dbFetch(res, -1)
+dbClearResult(res)
+
+query <- "SELECT * FROM business"
+res <- dbSendQuery(dcon, query)
+yelp_business <- dbFetch(res, -1)
+dbClearResult(res)
+
+query <- "SELECT * FROM yelp_business_attributes"
+res <- dbSendQuery(dcon, query)
+yelp_business_attributes <- dbFetch(res, -1)
+dbClearResult(res)
+
+dbDisconnect(dcon)
+
+```
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+star_count <- as.data.frame(table(yelp_review$stars))
+reviews <- yelp_review
+
+```
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+states <- map_data("state")
+states <- subset(states, states$region != "district of columbia")
+names <- state.name[! state.name %in% c("Hawaii", "Alaska")]
+abbs <- state.abb[! state.abb %in% c("HI", "AK")]
+
+# cats <- yelp_business$categories
+# cats <- subset(cats, str_detect(cats, "Restaurant"))
+# categories <- c()
+# for (cat in cats) {
+#   categories <- append(categories, str_split(cat, ";")[[1]])
+# }
+# categories <- sort(table(categories), decreasing = TRUE)
+# category_choices <- names(categories)[1:60]
+
+category_choices <- read.csv("category_choices.csv")
+category_choices <- category_choices$x[1:15]
+
+name_to_abb <- function(name) {
+  name = str_to_title(name)
+  idx <- which(names == name)
+  return(abbs[idx])
+}
+
+for (state in unique(states$region)) {
+  states$region[which(states$region == state)] <- name_to_abb(state)  
+}
+
+yelp_business <- subset(yelp_business, state %in% abbs)
+states$stars <- rep(0, length(states$region))
+
+for (s in abbs) {
+    state_business <- subset(yelp_business, state == s)
+    states$stars[which(states$region == s)] <- mean(state_business$stars)
+}
+
+category_means <- function(category) {
+  for (s in abbs) {
+    state_business <- subset(yelp_business, (state == s) & (str_detect(categories, category) == TRUE))
+    states$stars[which(states$region == s)] <- mean(state_business$stars)
+  }
+  return(states)
+}
+
+
+```
+
+## Introduction to Dataset
+
+Primary Dataset: **Yelp dataset**
+- a subset of Yelp's businesses, reviews, and user data
+- Reviews dataset contains 8+ million user reviews, where each user review is a rating given to a business and a text comment left by the user
+- Business dataset contains data about 150,000+ business from 8 metropolitan areas
+
+Secondary Dataset: US economic time series
+- time series data about economic health indicators of the US 
+
+## Questions
+
+1. What patterns can be found in user reviews and why do these patterns exist?
+2. How do various internal and external factors affect business popularity?
+3. How can we build a model to understand the sentiment expressed in a user review?
+
+# 1.Analyzing Patterns In User Reviews
+
+## Distribution Of User Ratings
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+star_count <- as.data.frame(table(yelp_review$stars))
+
+ggplot(star_count) + 
+  geom_col(aes(Var1, Freq, fill = Var1)) + 
+  theme(legend.position = "none") + 
+  labs(x = "Number Of Stars Given", 
+       y = "Frequency", 
+       title = "Frequency Distribution Of Number Of Stars Given")
+```
+
+## Correlation Between Review Length And Rating
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+comment_length <- str_length(yelp_review$text)
+df <- data.frame(length=comment_length, stars=yelp_review$stars)
+df <- df[sample(nrow(df), 1000), ]
+ggplot(df) + 
+  aes(x = stars, y = length, fill = factor(stars), group = stars) + 
+  geom_boxplot() + 
+  geom_jitter(width=0.1,alpha=0.2) +
+  labs(x = "Number Of Stars Given", 
+       y = "Mean Review Length", 
+       title = "Mean Review Length Vs. Number Of Stars Given") +
+  coord_cartesian(ylim = c(0,1200)) + theme(legend.position = "none")
+```
+
+<!-- ## Understanding Yelp's User Base -->
+
+<!-- ```{r echo = FALSE, message = FALSE, warning = FALSE} -->
+<!-- bins <- c(0, 0, 0, 0) -->
+<!-- users <- yelp_review$user_id -->
+<!-- usersdf <- as.data.frame(table(users)) -->
+<!-- freq <- usersdf$Freq -->
+<!-- for (i in freq) { -->
+<!-- if (i < 10) { -->
+<!-- bins[1] <- bins[1] + i -->
+<!-- } else if (i < 20) { -->
+<!-- bins[2] <- bins[2] + i -->
+<!-- } else if (i < 50) { -->
+<!-- bins[3] <- bins[3] + i -->
+<!-- } else if (i > 50) { -->
+<!-- bins[4] <- bins[4] + i -->
+<!-- } -->
+<!-- } -->
+<!-- data <- data.frame(bins = c("1-10", "10-20", "20-50", "50+"), reviews = bins/sum(bins) * 100) -->
+
+<!-- ggplot(data) + geom_col(aes(bins, reviews), fill = "lightblue") +  -->
+<!--   theme(plot.title = element_text(size = 20, hjust = 0.5),  -->
+<!--   axis.title = element_text(size = 15),  -->
+<!--   axis.text = element_text(size = 13)) +  -->
+<!--   labs(y = "Percentage Of Reviews", x = "Reviews Per User",  -->
+<!--   title = "Percentage Of Reviews By User Groups") -->
+<!-- ``` -->
+
+## User Ratings Across States
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(states) +
+  aes(long, lat, group = group) +
+  geom_polygon(aes(fill = stars)) +
+  theme(axis.text.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 13), 
+        plot.title = element_text(size = 17), 
+        axis.title = element_text(size = 17)) + 
+  labs(x = "Longitude (W)", y = "Latitude (N)", 
+       title = "User Rating by State") +
+  scale_fill_distiller(palette = "RdPu")
+```
+
+## User Ratings Across States
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+make_killer <- function(st, reviews_per_dot){
+  set.seed(314)
+  restaurants <- subset(yelp_business, str_detect(categories, "Restaurants"))
+  restaurants <- subset(restaurants, state == st)
+  chinese <- subset(restaurants, str_detect(categories, "Chinese"))
+  italian <- subset(restaurants, str_detect(categories, "Italian"))
+  mexican <- subset(restaurants, str_detect(categories, "Mexican"))
+  indian <- subset(restaurants, str_detect(categories, "Indian"))
+  fast_food <- subset(restaurants, str_detect(categories, "Fast Food"))
+  
+  chinese_avg <- sum(chinese$stars * chinese$review_count)/sum(chinese$review_count)
+  italian_avg <- sum(italian$stars * italian$review_count)/sum(italian$review_count)
+  mexican_avg <- sum(mexican$stars * mexican$review_count)/sum(mexican$review_count)
+  indian_avg <- sum(indian$stars * indian$review_count)/sum(indian$review_count)
+  fast_food_avg <- sum(fast_food$stars * fast_food$review_count)/sum(fast_food$review_count)
+  avg_ratings <- c(chinese_avg, fast_food_avg, italian_avg, indian_avg, mexican_avg)
+  
+  chinese_n <- sum(chinese$review_count)
+  italian_n <- sum(italian$review_count)
+  mexican_n <- sum(mexican$review_count)
+  indian_n <- sum(indian$review_count)
+  fast_food_n <- sum(fast_food$review_count)
+  reviews_n <- c(chinese_n, fast_food_n, italian_n, indian_n, mexican_n)
+  
+  categories <- c("Chinese", "Fast Food", "Indian", "Italian", "Mexican")
+  category_ratings <- data.frame(category = categories, rating = avg_ratings, reviews_n = reviews_n)
+  
+  category_ratings <- category_ratings %>% mutate(ceiling(reviews_n / reviews_per_dot))
+  colnames(category_ratings)[4] <- "num_dots"
+  
+  return(category_ratings)}
+  
+  
+  
+make_dots <- function(category_ratings){
+  
+  points <- data.frame(x = c(), y = c())
+  
+  for (i in 1:5){
+    num <-  category_ratings$num_dots[i]
+    max_y <- category_ratings$rating[i]
+    x <-  runif(num, min = i - 0.4, max = i + 0.4)
+    y <- runif(num, min = 0.05, max = max_y - 0.05)
+    rand_points <- cbind(x, y)
+    points <- rbind(points, rand_points)
+  }
+  
+  return(points)
+}
+
+sidebarLayout(
+  position = "left",
+  sidebarPanel(
+    sliderInput("num", label = "Reviews per dot", min = 500, value = 1000, max = 100000),
+    selectInput("state", label = "State", choices = state.abb, selected = "CA")
+  ),
+  mainPanel(
+    plotOutput("output")
+  )
+)
+
+renderPlot(ggplot(make_killer(input$state, input$num)) + 
+    geom_col(aes(x = category, y = rating, fill = category)) + 
+    theme(legend.position = "none") + 
+    labs(x = "Food category", 
+         y = "Average Rating",
+         title = "Average Rating Of Different Food Categories") + 
+    geom_point(data = make_dots(make_killer(input$state, input$num)), aes(x = x, y = y))
+)
+```
+
+## User Ratings Of Different Categories
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+inputPanel(
+  selectInput("food_category", label = "Category",
+              choices = category_choices, selected = "Burgers")
+)
+
+renderPlot({
+  ggplot(category_means(input$food_category)) +
+      aes(long, lat, group = group) +
+      geom_polygon(aes(fill = stars)) +
+      theme(axis.text.x = element_text(size = 13),
+            axis.text.y = element_text(size = 13),
+            plot.title = element_text(size = 17),
+            axis.title = element_text(size = 17)) + 
+      labs(x = "Longitude (W)", y = "Latitude (N)", title = "User Rating by Category") + 
+    scale_fill_viridis(discrete=FALSE)
+})
+```
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+df <- merge(yelp_business[c("business_id", "stars")], yelp_business_attributes, by = "business_id")
+bar_df <- data.frame(x = 0, y = 0, condition = 0)
+
+valid <- c()
+nas <- c()
+att <- c()
+
+for (col in names(df)[3:length(names(df))]) {
+  att <- append(att, col)
+  valid <- append(valid, table(df[, col] %in% c("True", "False"))["TRUE"])
+  nas <- append(nas, table(df[, col] %in% c("True", "False"))["FALSE"])
+}
+
+atts <- data.frame(valid = valid, nas = nas, att = att)
+atts <- atts[order(-atts$valid), ]
+atts <- subset(atts, valid > 1000)
+attributes <- atts$att
+
+for (attribute in attributes) {
+  bar_df <- rbind(bar_df, c(attribute, mean(df$stars[df[, attribute] == "True"]), "True"))
+  bar_df <- rbind(bar_df, c(attribute, mean(df$stars[df[, attribute] == "False"]), "False"))
+}
+
+bar_df <- bar_df[-1, ]
+bar_df$y <- as.double(bar_df$y)
+
+attributes_to_keep <- c("BusinessParking_lot", "BikeParking", "BusinessAcceptsCreditCards", "WheelchairAccessible", "Alcohol", "HappyHour", "DogsAllowed", "RestaurantsTableService", "Caters", "GoodForMeal_latenight", "CoatCheck", "OutdoorSeating", "Open24Hours")
+bar_df <- subset(bar_df, x %in% attributes_to_keep)
+
+bar_df$x <- str_replace_all(bar_df$x, "BusinessParking_lot", "Business Parking Lot")
+bar_df$x <- str_replace_all(bar_df$x, "BikeParking", "Bike Parking")
+bar_df$x <- str_replace_all(bar_df$x, "BusinessAcceptsCreditCards", "Accepts Credit Cards")
+bar_df$x <- str_replace_all(bar_df$x, "WheelchairAccessible", "Wheelchair Accessible")
+bar_df$x <- str_replace_all(bar_df$x, "HappyHour", "Happy Hour")
+bar_df$x <- str_replace_all(bar_df$x, "DogsAllowed", "Dogs Allowed")
+bar_df$x <- str_replace_all(bar_df$x, "RestaurantsTableService", "Table Service")
+bar_df$x <- str_replace_all(bar_df$x, "GoodForMeal_latenight", "Late night meal")
+bar_df$x <- str_replace_all(bar_df$x, "CoatCheck", "Coat Check")
+bar_df$x <- str_replace_all(bar_df$x, "OutdoorSeating", "Outdoor Seating")
+bar_df$x <- str_replace_all(bar_df$x, "Open24Hours", "Open 24 Hours")
+```
+# 2.Effects Of Internal And External Factors On Business Popularity
+
+## Correlations Of Intraneous Variables With Business Popularity
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+ggplot(bar_df) +  
+  geom_bar(aes(x, y, fill=condition), position = "dodge", stat = "identity") +
+  theme(axis.text.x = element_text(size = 13, angle = 45, hjust = 1), 
+        axis.text.y = element_text(size = 13), 
+        plot.title = element_text(size = 17), 
+        axis.title = element_text(size = 17)) + 
+  labs(x = "Business Attribute", y = "Average Rating") +
+  coord_cartesian(ylim = c(2.5,4.6))
+```
+
+<!-- ## Effect Of Economic Health On Business Popularity -->
+## A Case Study of Subway 
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+company_series <- function(company_name) {
+  company <- subset(yelp_business, str_detect(name, company_name))
+  stars <- subset(reviews, business_id %in% company$business_id)
+  stars <- stars[c("stars", "date")]
+  stars$date <- substr(stars$date, 1, 7)
+  unique_date <- stars %>% group_by(date) %>% summarise(mean = mean(stars))
+  unique_date$date <- as.Date(paste0(unique_date$date, "-01"))
+  unique_date$name <- rep(company_name, length(unique_date$mean))
+  return(unique_date)
+}
+
+unique_date <- rbind(company_series("Subway"), company_series("Wendy's"), company_series("Papa John's"),
+                     company_series("Mon Ami Gabi"), company_series("Bachi Burger"), company_series("Pizzeria Bianco"))
+
+ggplot(unique_date[unique_date$name == "Subway", ]) + aes(date, mean) + geom_line() + 
+  theme(plot.title = element_text(size = 20, hjust = 0.5), 
+  axis.title = element_text(size = 13), 
+  axis.text = element_text(size = 10)) + 
+  labs(x = "Year", y = "Average Rating", title = "Average Rating Time Series of Subway")
+```
+
+## A Case Study of Subway (with secondary data)
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+economics_subset <- subset(economics, date >= unique_date$date[1])
+ggplot(unique_date[unique_date$name == "Subway", ]) + aes(date, mean, colour = "blue") + geom_line() + 
+  theme(plot.title = element_text(size = 20, hjust = 0.5), 
+  axis.title = element_text(size = 13), 
+  axis.text = element_text(size = 10)) + 
+  labs(x = "Year", y = "Average Rating", title = "Average Rating Time Series of Subway") +
+  scale_color_manual(labels = c("# of Unemployed", "Duration of Unemployment", "Average Rating"),
+                     values = c("red", "green", "blue")) +
+  geom_line(data = economics_subset, aes(date, uempmed/5, colour = "green")) +
+  geom_line(data = economics_subset, aes(date, unemploy/3000, colour = "red"))
+```
+
+## Business size and extraneous economic factors
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+unique_date$name <- factor(unique_date$name, levels = c("Subway", "Wendy's", "Papa John's", "Mon Ami Gabi", "Bachi Burger", "Pizzeria Bianco"))
+
+ggplot(unique_date) + aes(date, mean, colour = "blue") + geom_line() +
+  theme(plot.title = element_text(size = 20, hjust = 0.5),
+  axis.title = element_text(size = 13),
+  axis.text = element_text(size = 10)) +
+  labs(x = "Year", y = "Average Rating/Economic Indicator", title = "Average Rating Time Series of Businesses",
+       color = "\n") +
+  scale_color_manual(labels = c("Duration of Unemployment", "Average Rating"),
+                     values = c("red", "blue")) +
+  geom_line(data = economics_subset, aes(date, uempmed/5, colour = "red")) + 
+  facet_wrap(name ~ ., ncol = 3, scales = "fixed")
+```
+
+# 3.Sentiment Analysis Of Reviews
+
+## Sentiment Analysis Of Reviews
+
+**"Super simple place but amazing nonetheless. It's been around since the 30's and they still serve the same thing they started with: a bologna and salami sandwich with mustard. Staff was very helpful and friendly."**
+
+**"Service here is not great, it felt like they had forgotten about us and that they didn't care about the service as everything came out one at a time. The Momofuko ramen was awful. It was bland and mushy. After a few bites, I couldn't handle eating anymore. Momofuko is not the place to go if you want real ramen. I've had better experience with instant noodles."**
+
+## Sentiment Analysis Of Reviews
+
+- **Objective**: Given the text of a user review, predict if it is a positive or a negative review.
+
+- **Supervised machine learning** an obvious solution
+
+- Problem: **Feature Extraction**
+  + How do we convert the text of a review into features that can be used by a machine learning algorithm?
+
+## Bag-Of-Words Approach
+
+- Solution: Use the **relative frequencies** of words as features
+
+- Term Frequency-Inverse Document Frequency(**TF-IDF**):
+  $$tfidf(t, r, R) = \frac{f_{t,r}}{\sum_{t' \in r}{f_{t', r}}} \cdot \log\left(\frac{N}{|r \in R: t \in R|}\right)$$
+  
+  - $f_{t, d}$: the number of times that term $t$ occurs in review $r$.
+  - $N$: total number of reviews
+  - $|r \in R: t \in R|$: number of reviews where the term $t$ appears
+  
+## Logistic Regression
+
+- Converted each review to a TF-IDF vector of the most commonly occurring 2000 words. 
+
+- Used a subset of our review data as training data to train a **logistic regression** model.
+
+- Analyzed the **most important** words (the words corresponding to the most positive and most negative weights in the model).
+
+## Most Important Words
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+weights = read.csv("weights2.csv")
+
+weights <- weights %>% mutate(size = abs(coef)/2.3)
+weights <- weights %>% mutate(type = ifelse(coef >= 0, "red", "blue"))
+
+ggplot(
+  weights, 
+  aes(
+    label = word, size = size,
+    x = type, color = type
+  )
+) +
+  geom_text_wordcloud_area(shape = "diamond") +
+  scale_size_area(max_size = 20) +
+  scale_x_discrete(breaks = NULL) +
+  theme_minimal() + theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank())
+```
